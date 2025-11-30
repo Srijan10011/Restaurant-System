@@ -468,6 +468,38 @@ app.get('/orders/history/:tableId', async (req, res) => {
   }
 });
 
+app.get('/bill/:tableId', async (req, res) => {
+  if (supabase) {
+    const { data: activeSession } = await supabase
+      .from('customer_sessions')
+      .select('id')
+      .eq('table_id', req.params.tableId)
+      .eq('status', 'active')
+      .single();
+    
+    if (!activeSession) {
+      return res.json({ total: 0, orders: [] });
+    }
+    
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('customer_session_id', activeSession.id)
+      .in('status', ['pending', 'preparing', 'completed', 'served']);
+    
+    if (error) return res.status(500).json({ error: error.message });
+    
+    const total = data.reduce((sum, order) => sum + (order.total_amount || 0), 0);
+    res.json({ total, orders: data.length });
+  } else {
+    const tableOrders = orderHistory.filter(o => o.tableId === req.params.tableId);
+    const total = tableOrders.reduce((sum, order) => {
+      return sum + order.items.reduce((itemSum, item) => itemSum + (item.price * item.quantity), 0);
+    }, 0);
+    res.json({ total, orders: tableOrders.length });
+  }
+});
+
 app.patch('/orders/:id', auth(['kitchen']), async (req, res) => {
   if (supabase) {
     const { data, error } = await supabase
