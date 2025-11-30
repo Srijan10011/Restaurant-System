@@ -37,8 +37,8 @@
             position: fixed; 
             top: 20px; 
             right: 20px; 
-            background: #ff5722; 
-            color: white; 
+            background: white; 
+            color: #333; 
             border-radius: 50%; 
             width: 60px; 
             height: 60px; 
@@ -95,6 +95,19 @@
             <span id="billDetails" style="margin-left: 15px; font-size: 12px; color: #666;"></span>
         </div>
         
+        <div style="margin: 20px 0; padding: 15px; background: #f5f5f5; border-radius: 8px;">
+            <h4 style="margin: 0 0 10px 0;">Search & Filter</h4>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <input type="text" id="searchInput" placeholder="What would you like to eat?" 
+                       style="flex: 1; min-width: 200px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;"
+                       oninput="filterMenu()">
+                <select id="categoryFilter" onchange="filterMenu()" 
+                        style="padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <option value="">All Categories</option>
+                </select>
+            </div>
+        </div>
+        
         <div id="menu"></div>
         
         <h3>Order History & Status</h3>
@@ -142,10 +155,11 @@
             displayBill(billData);
         });
         
-        function displayMenu() {
+        function displayMenu(filteredMenu = null) {
+            const menuToShow = filteredMenu || menu;
             const menuDiv = document.getElementById('menu');
             menuDiv.innerHTML = '<h3>Menu</h3><div class="menu-grid">' + 
-                menu.map(item => `
+                menuToShow.map(item => `
                     <div class="menu-item">
                         <div class="menu-image">Image</div>
                         <h4 style="margin: 0 0 5px 0;">${item.name}</h4>
@@ -153,6 +167,27 @@
                         <button onclick="addToCart(${item.id})" style="width: 100%;">Add to Cart</button>
                     </div>
                 `).join('') + '</div>';
+            
+            // Populate categories dropdown (only once)
+            if (!filteredMenu) {
+                const categories = [...new Set(menu.map(item => item.category).filter(Boolean))];
+                const categorySelect = document.getElementById('categoryFilter');
+                categorySelect.innerHTML = '<option value="">All Categories</option>' +
+                    categories.map(cat => `<option value="${cat}">${cat}</option>`).join('');
+            }
+        }
+        
+        function filterMenu() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            const selectedCategory = document.getElementById('categoryFilter').value;
+            
+            const filtered = menu.filter(item => {
+                const matchesSearch = item.name.toLowerCase().includes(searchTerm);
+                const matchesCategory = !selectedCategory || item.category === selectedCategory;
+                return matchesSearch && matchesCategory;
+            });
+            
+            displayMenu(filtered);
         }
         
         function addToCart(itemId) {
