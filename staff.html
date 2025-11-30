@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Staff Terminal</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .hidden { display: none; }
+        .order { border: 1px solid #ccc; margin: 10px; padding: 15px; }
+        .menu-item { border: 1px solid #eee; margin: 5px; padding: 10px; }
+        button { padding: 8px 12px; margin: 5px; }
+        input, select { padding: 8px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <!-- Login Screen -->
+    <div id="loginScreen">
+        <h2>Staff Login</h2>
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="login()">Login</button>
+    </div>
+
+    <!-- Staff Dashboard -->
+    <div id="dashboard" class="hidden">
+        <h2>Staff Dashboard - <span id="userRole"></span></h2>
+        <button onclick="logout()">Logout</button>
+        
+        <!-- Kitchen Terminal -->
+        <div id="kitchenPanel" class="hidden">
+            <h3>Kitchen Orders</h3>
+            <div id="kitchenOrders"></div>
+        </div>
+        
+        <!-- Waiter Terminal -->
+        <div id="waiterPanel" class="hidden">
+            <h3>Completed Orders Ready for Serving</h3>
+            <div id="waiterOrders"></div>
+        </div>
+        
+        <!-- Counter Terminal -->
+        <div id="counterPanel" class="hidden">
+            <h3>Orders by Table</h3>
+            <div id="allOrders"></div>
+        </div>
+        
+        <!-- Admin Panel -->
+        <div id="adminPanel" class="hidden">
+            <h3>Menu Management</h3>
+            <div>
+                <input type="text" id="itemName" placeholder="Item Name">
+                <input type="number" id="itemPrice" placeholder="Price" step="0.01">
+                <input type="text" id="itemCategory" placeholder="Category">
+                <button onclick="addMenuItem()">Add Item</button>
+            </div>
+            <div id="menuItems"></div>
+            
+            <h3>Staff Management</h3>
+            <div>
+                <input type="text" id="newUsername" placeholder="Username">
+                <input type="password" id="newPassword" placeholder="Password">
+                <select id="newRole">
+                    <option value="waiter">Waiter</option>
+                    <option value="kitchen">Kitchen</option>
+                    <option value="counter">Counter</option>
+                    <option value="admin">Admin</option>
+                </select>
+                <button onclick="addStaff()">Add Staff</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let token = localStorage.getItem('staffToken') || '';
+        let userRole = localStorage.getItem('staffRole') || '';
+        
+        // Auto-login if token exists
+        if (token && userRole) {
+            showDashboard();
+        }
+        
+        function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            fetch('/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.token) {
+                    token = data.token;
+                    userRole = data.role;
+                    localStorage.setItem('staffToken', token);
+                    localStorage.setItem('staffRole', userRole);
+                    showDashboard();
+                } else {
+                    alert('Login failed');
+                }
+            });
+        }
+        
+        function logout() {
+            token = '';
+            userRole = '';
+            localStorage.removeItem('staffToken');
+            localStorage.removeItem('staffRole');
+            document.getElementById('loginScreen').classList.remove('hidden');
+            document.getElementById('dashboard').classList.add('hidden');
+            hideAllPanels();
+        }
+        
+        function hideAllPanels() {
+            document.getElementById('kitchenPanel').classList.add('hidden');
+            document.getElementById('waiterPanel').classList.add('hidden');
+            document.getElementById('counterPanel').classList.add('hidden');
+            document.getElementById('adminPanel').classList.add('hidden');
+        }
+        
+        function showDashboard() {
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('dashboard').classList.remove('hidden');
+            document.getElementById('userRole').textContent = userRole;
+            hideAllPanels();
+            
+            if (userRole === 'kitchen') {
+                document.getElementById('kitchenPanel').classList.remove('hidden');
+                loadKitchenOrders();
+            } else if (userRole === 'waiter') {
+                document.getElementById('waiterPanel').classList.remove('hidden');
+                loadWaiterOrders();
+            } else if (userRole === 'counter') {
+                document.getElementById('counterPanel').classList.remove('hidden');
+                loadAllOrders();
+            } else if (userRole === 'admin') {
+                document.getElementById('adminPanel').classList.remove('hidden');
+                loadMenuItems();
+            }
+        }
+        
+        function loadKitchenOrders() {
+            fetch('/orders', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            .then(res => {
+                console.log('Orders API response status:', res.status);
+                if (res.status === 401) {
+                    // Token is invalid, logout and redirect to login
+                    logout();
+                    return Promise.reject('Authentication failed');
+                }
+                return res.json();
+            })
+            .then(orders => {
+                console.log('Orders API response:', orders);
+                console.log('Orders type:', typeof orders);
+                console.log('Orders keys:', Object.keys(orders));
+                if (!Array.isArray(orders)) {
+                    console.error('Orders response is not an array:', orders);
+                    document.getElementById('kitchenOrders').innerHTML = `<p>Error loading orders: ${JSON.stringify(orders)}</p>`;
+                    return;
+                }
+                // Only show pending and preparing orders
+                const activeOrders = orders.filter(order => order.status === 'pending' || order.status === 'preparing');
+                const kitchenDiv = document.getElementById('kitchenOrders');
+                kitchenDiv.innerHTML = activeOrders.map(order => `
+                    <div class="order">
+                        <h4>Table ${order.table_id || order.tableId} - Order #${order.id}</h4>
+                        <p>Status: ${order.status}</p>
+                        <div>${order.items.map(item => `${item.name} x${item.quantity}`).join(', ')}</div>
+                        ${order.status === 'pending' ? `<button onclick="updateOrderStatus(${order.id}, 'preparing')">Start Preparing</button>` : ''}
+                        ${order.status === 'preparing' ? `<button onclick="updateOrderStatus(${order.id}, 'completed')">Mark Complete</button>` : ''}
+                    </div>
+                `).join('') || '<p>No orders to prepare</p>';
+            });
+        }
+        
+        function loadWaiterOrders() {
+            fetch('/orders', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            .then(res => {
+                console.log('Waiter orders API response status:', res.status);
+                if (res.status === 401) {
+                    logout();
+                    return Promise.reject('Authentication failed');
+                }
+                return res.json();
+            })
+            .then(orders => {
+                console.log('Waiter orders API response:', orders);
+                if (!Array.isArray(orders)) {
+                    console.error('Orders response is not an array:', orders);
+                    document.getElementById('waiterOrders').innerHTML = `<p>Error loading orders: ${orders.error || 'Unknown error'}</p>`;
+                    return;
+                }
+                console.log('All orders for waiter:', orders);
+                const completedOrders = orders.filter(order => order.status === 'completed');
+                console.log('Completed orders for waiter:', completedOrders);
+                
+                const waiterDiv = document.getElementById('waiterOrders');
+                if (completedOrders.length === 0) {
+                    waiterDiv.innerHTML = '<p>No completed orders ready for serving</p>';
+                    return;
+                }
+                
+                waiterDiv.innerHTML = completedOrders.map(order => `
+                    <div class="order">
+                        <h4>Table ${order.table_id || order.tableId} - Order #${order.id}</h4>
+                        <p>Status: ${order.status} - Ready to Serve</p>
+                        <div>Items: ${order.items.map(item => `${item.name} x${item.quantity}`).join(', ')}</div>
+                        <button onclick="serveOrder(${order.id})">Mark as Served</button>
+                    </div>
+                `).join('');
+            })
+            .catch(error => {
+                console.error('Error loading waiter orders:', error);
+                document.getElementById('waiterOrders').innerHTML = '<p>Error loading orders</p>';
+            });
+        }
+        
+        function loadAllOrders() {
+            fetch('/orders', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            .then(res => {
+                console.log('Counter orders API response status:', res.status);
+                if (res.status === 401) {
+                    logout();
+                    return Promise.reject('Authentication failed');
+                }
+                return res.json();
+            })
+            .then(orders => {
+                console.log('Counter orders API response:', orders);
+                if (!Array.isArray(orders)) {
+                    console.error('Orders response is not an array:', orders);
+                    document.getElementById('allOrders').innerHTML = `<p>Error loading orders: ${orders.error || 'Unknown error'}</p>`;
+                    return;
+                }
+                // Group orders by table, but only show orders from active sessions
+                const tableGroups = {};
+                orders.forEach(order => {
+                    // Only include orders from active customer sessions
+                    if (order.customer_sessions && order.customer_sessions.status === 'active') {
+                        const tableId = order.table_id || order.tableId;
+                        if (!tableGroups[tableId]) {
+                            tableGroups[tableId] = [];
+                        }
+                        tableGroups[tableId].push(order);
+                    }
+                });
+                
+                const ordersDiv = document.getElementById('allOrders');
+                ordersDiv.innerHTML = Object.keys(tableGroups).map(tableId => {
+                    const tableOrders = tableGroups[tableId];
+                    const allItems = {};
+                    let totalAmount = 0;
+                    
+                    // Combine all items from all orders for this table
+                    tableOrders.forEach(order => {
+                        order.items.forEach(item => {
+                            if (allItems[item.name]) {
+                                allItems[item.name].quantity += item.quantity;
+                            } else {
+                                allItems[item.name] = { ...item };
+                            }
+                        });
+                        totalAmount += order.total_amount || 0;
+                    });
+                    
+                    const itemsList = Object.values(allItems);
+                    const orderStatuses = tableOrders.map(o => `#${o.id}(${o.status})`).join(', ');
+                    
+                    return `
+                        <div class="order">
+                            <h4>Table ${tableId}</h4>
+                            <p><strong>Total Orders:</strong> ${tableOrders.length}</p>
+                            <p><strong>Total Amount:</strong> $${totalAmount.toFixed(2)}</p>
+                            
+                            <div><strong>Add Items:</strong></div>
+                            <div style="margin: 10px 0; padding: 10px; border: 1px solid #ddd;">
+                                <select id="itemSelect_${tableId}">
+                                    <option value="">Select item to add...</option>
+                                </select>
+                                <input type="number" id="itemQuantity_${tableId}" min="1" value="1" style="width: 60px;">
+                                <button onclick="addItemToTable('${tableId}')">Add Item</button>
+                            </div>
+                            
+                            <div><strong>All Items:</strong></div>
+                            <ul>
+                                ${itemsList.map(item => `
+                                    <li>
+                                        ${item.name} x${item.quantity} - $${(item.price * item.quantity).toFixed(2)}
+                                        <button onclick="modifyItem('${tableId}', '${item.name}', -1)">-</button>
+                                        <button onclick="modifyItem('${tableId}', '${item.name}', 1)">+</button>
+                                    </li>
+                                `).join('')}
+                            </ul>
+                            <div><strong>Orders:</strong></div>
+                            <ul>
+                                ${tableOrders.map(order => `
+                                    <li>
+                                        Order #${order.id} (${order.status}) - $${order.total_amount.toFixed(2)}
+                                        <button onclick="cancelOrder(${order.id})">Cancel Order</button>
+                                    </li>
+                                `).join('')}
+                            </ul>
+                            <button onclick="confirmCheckout('${tableId}', ${totalAmount})">Confirm Checkout - $${totalAmount.toFixed(2)}</button>
+                            <button onclick="cancelTable('${tableId}')">Cancel Entire Table</button>
+                        </div>
+                    `;
+                }).join('') || '<p>No active orders</p>';
+                
+                // Load menu items for dropdowns after rendering
+                loadMenuForCounter();
+            });
+        }
+        
+        function loadMenuItems() {
+            fetch('/menu')
+            .then(res => res.json())
+            .then(items => {
+                const menuDiv = document.getElementById('menuItems');
+                menuDiv.innerHTML = items.map(item => `
+                    <div class="menu-item">
+                        ${item.name} - $${item.price} (${item.category})
+                        <button onclick="deleteMenuItem(${item.id})">Delete</button>
+                    </div>
+                `).join('');
+            });
+        }
+        
+        function updateOrderStatus(orderId, status) {
+            fetch(`/orders/${orderId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ status })
+            })
+            .then(() => loadKitchenOrders());
+        }
+        
+        function serveOrder(orderId) {
+            fetch(`/orders/${orderId}/serve`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(() => loadWaiterOrders());
+        }
+        
+        let menuItems = [];
+
+        function loadMenuForCounter() {
+            fetch('/menu')
+            .then(res => res.json())
+            .then(items => {
+                menuItems = items;
+                // Populate all item dropdowns
+                document.querySelectorAll('[id^="itemSelect_"]').forEach(select => {
+                    select.innerHTML = '<option value="">Select item to add...</option>' +
+                        items.map(item => `<option value="${item.id}" data-price="${item.price}">${item.name} - $${item.price}</option>`).join('');
+                });
+            });
+        }
+
+        function addItemToTable(tableId) {
+            const select = document.getElementById(`itemSelect_${tableId}`);
+            const quantity = parseInt(document.getElementById(`itemQuantity_${tableId}`).value);
+            
+            if (!select.value || quantity < 1) {
+                alert('Please select an item and valid quantity');
+                return;
+            }
+            
+            const selectedOption = select.options[select.selectedIndex];
+            const itemName = selectedOption.text.split(' - $')[0];
+            const itemPrice = parseFloat(selectedOption.dataset.price);
+            
+            if (confirm(`Add ${quantity}x ${itemName} to table ${tableId}?\nCost: $${(itemPrice * quantity).toFixed(2)}`)) {
+                const items = [{
+                    id: parseInt(select.value),
+                    name: itemName,
+                    price: itemPrice,
+                    quantity: quantity
+                }];
+                
+                fetch('/orders/add-items', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ tableId, items })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                    } else {
+                        select.value = '';
+                        document.getElementById(`itemQuantity_${tableId}`).value = 1;
+                        loadAllOrders();
+                    }
+                });
+            }
+        }
+
+        function modifyItem(tableId, itemName, change) {
+            // This would require a new API endpoint to modify existing orders
+            if (confirm(`${change > 0 ? 'Add' : 'Remove'} 1 ${itemName} ${change > 0 ? 'to' : 'from'} table ${tableId}?`)) {
+                fetch(`/orders/modify`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ tableId, itemName, change })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                    } else {
+                        loadAllOrders();
+                    }
+                });
+            }
+        }
+
+        function cancelOrder(orderId) {
+            if (confirm(`Cancel order #${orderId}? This cannot be undone.`)) {
+                fetch(`/orders/order/${orderId}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                    } else {
+                        loadAllOrders();
+                    }
+                });
+            }
+        }
+
+        function cancelTable(tableId) {
+            if (confirm(`Cancel ALL orders for table ${tableId}? This cannot be undone.`)) {
+                fetch(`/orders/table/${tableId}/cancel`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                    } else {
+                        loadAllOrders();
+                    }
+                });
+            }
+        }
+
+        function confirmCheckout(tableId, totalAmount) {
+            if (confirm(`Confirm checkout for table ${tableId}?\nTotal: $${totalAmount.toFixed(2)}\n\nThis will complete the session and clear the table.`)) {
+                resetTable(tableId);
+            }
+        }
+
+        function resetTable(tableId) {
+            console.log('Resetting table:', tableId);
+            fetch(`/orders/${tableId}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            .then(res => {
+                console.log('Reset response status:', res.status);
+                if (res.status === 401) {
+                    logout();
+                    return Promise.reject('Authentication failed');
+                }
+                return res.json();
+            })
+            .then(data => {
+                console.log('Table reset response:', data);
+                if (data.error) {
+                    alert('Error resetting table: ' + data.error);
+                } else {
+                    alert(`Table ${tableId} checkout completed!\nTotal: $${data.totalAmount?.toFixed(2) || '0.00'}`);
+                    loadAllOrders();
+                }
+            })
+            .catch(error => {
+                console.error('Error resetting table:', error);
+                if (error !== 'Authentication failed') {
+                    alert('Error resetting table: ' + error);
+                }
+                loadAllOrders();
+            });
+        }
+        
+        function addMenuItem() {
+            const name = document.getElementById('itemName').value;
+            const price = parseFloat(document.getElementById('itemPrice').value);
+            const category = document.getElementById('itemCategory').value;
+            
+            fetch('/menu', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ name, price, category })
+            })
+            .then(() => {
+                loadMenuItems();
+                document.getElementById('itemName').value = '';
+                document.getElementById('itemPrice').value = '';
+                document.getElementById('itemCategory').value = '';
+            });
+        }
+        
+        function deleteMenuItem(id) {
+            fetch(`/menu/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            .then(() => loadMenuItems());
+        }
+        
+        function addStaff() {
+            const username = document.getElementById('newUsername').value;
+            const password = document.getElementById('newPassword').value;
+            const role = document.getElementById('newRole').value;
+            
+            fetch('/register', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ username, password, role })
+            })
+            .then(() => {
+                alert('Staff added successfully');
+                document.getElementById('newUsername').value = '';
+                document.getElementById('newPassword').value = '';
+            });
+        }
+        
+        socket.on('orderUpdate', () => {
+            if (userRole === 'kitchen') loadKitchenOrders();
+            if (userRole === 'waiter') loadWaiterOrders();
+            if (userRole === 'counter') loadAllOrders();
+        });
+        
+        socket.on('tableReset', (tableId) => {
+            if (userRole === 'counter') {
+                console.log('Table reset event received for table:', tableId);
+                loadAllOrders();
+            }
+        });
+    </script>
+</body>
+</html>

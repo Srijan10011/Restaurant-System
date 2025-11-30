@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Staff Signup</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 50px; max-width: 400px; }
+        .form-group { margin: 15px 0; }
+        input, select { width: 100%; padding: 10px; margin: 5px 0; }
+        button { width: 100%; padding: 12px; background: #007bff; color: white; border: none; }
+        .message { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h2>Staff Registration</h2>
+    
+    <form id="signupForm">
+        <div class="form-group">
+            <label>Username:</label>
+            <input type="text" id="username" required>
+        </div>
+        
+        <div class="form-group">
+            <label>Password:</label>
+            <input type="password" id="password" required>
+        </div>
+        
+        <div class="form-group">
+            <label>Role:</label>
+            <select id="role" required>
+                <option value="">Select Role</option>
+                <option value="admin">Admin</option>
+                <option value="kitchen">Kitchen Staff</option>
+                <option value="counter">Counter Staff</option>
+                <option value="waiter">Waiter</option>
+            </select>
+        </div>
+        
+        <button type="submit">Sign Up</button>
+    </form>
+    
+    <div id="message"></div>
+    
+    <p><a href="staff.html">Already have an account? Login here</a></p>
+
+    <script>
+        document.getElementById('signupForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const role = document.getElementById('role').value;
+            
+            try {
+                const response = await fetch('/signup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, role })
+                });
+                
+                const data = await response.json();
+                const messageDiv = document.getElementById('message');
+                
+                if (response.ok) {
+                    messageDiv.innerHTML = `<div class="message success">Account created successfully! You can now <a href="staff.html">login here</a></div>`;
+                    document.getElementById('signupForm').reset();
+                } else {
+                    messageDiv.innerHTML = `<div class="message error">${data.error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('message').innerHTML = `<div class="message error">Network error: ${error.message}</div>`;
+            }
+        });
+    </script>
+</body>
+</html>

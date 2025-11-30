@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Customer Terminal</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .menu-item { border: 1px solid #ccc; margin: 10px; padding: 15px; }
+        .order-status { background: #f0f0f0; padding: 10px; margin: 10px 0; }
+        button { padding: 10px 15px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Restaurant Order - Table <span id="tableId"></span></h1>
+    
+    <div id="menu"></div>
+    
+    <h3>Your Order</h3>
+    <div id="cart"></div>
+    <button onclick="placeOrder()">Place Order</button>
+    
+    <h3>Order History & Status</h3>
+    <div id="orderStatus"></div>
+
+    <script>
+        const socket = io();
+        const tableId = new URLSearchParams(window.location.search).get('table') || '1';
+        document.getElementById('tableId').textContent = tableId;
+        
+        let menu = [];
+        let cart = JSON.parse(localStorage.getItem(`cart_${tableId}`)) || [];
+        let orderHistory = [];
+        let sessionId = null;
+        
+        socket.emit('joinTable', tableId);
+        
+        // Load menu and order history
+        Promise.all([
+            fetch('/menu').then(res => res.json()),
+            fetch(`/orders/history/${tableId}`).then(res => res.json())
+        ]).then(([menuData, historyData]) => {
+            menu = menuData;
+            orderHistory = historyData;
+            displayMenu();
+            displayCart();
+            displayOrderHistory();
+        });
+        
+        function displayMenu() {
+            const menuDiv = document.getElementById('menu');
+            menuDiv.innerHTML = menu.map(item => `
+                <div class="menu-item">
+                    <h4>${item.name} - $${item.price}</h4>
+                    <button onclick="addToCart(${item.id})">Add to Cart</button>
+                </div>
+            `).join('');
+        }
+        
+        function addToCart(itemId) {
+            const item = menu.find(m => m.id === itemId);
+            const cartItem = cart.find(c => c.id === itemId);
+            
+            if (cartItem) {
+                cartItem.quantity++;
+            } else {
+                cart.push({ ...item, quantity: 1 });
+            }
+            localStorage.setItem(`cart_${tableId}`, JSON.stringify(cart));
+            displayCart();
+        }
+        
+        function displayCart() {
+            const cartDiv = document.getElementById('cart');
+            if (cart.length === 0) {
+                cartDiv.innerHTML = '<p>Cart is empty</p>';
+                return;
+            }
+            cartDiv.innerHTML = cart.map(item => `
+                <div>${item.name} x${item.quantity} - $${(item.price * item.quantity).toFixed(2)}</div>
+            `).join('');
+        }
+        
+        function placeOrder() {
+            if (cart.length === 0) return alert('Cart is empty');
+            
+            // Create session if it doesn't exist (first order)
+            const orderPromise = sessionId ? 
+                Promise.resolve({ sessionId }) :
+                fetch('/customer-session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tableId })
+                }).then(res => res.json());
+            
+            orderPromise.then(data => {
+                if (!sessionId) {
+                    sessionId = data.sessionId;
+                    console.log('New session created: ' + sessionId);
+                }
+                
+                return fetch('/orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tableId, items: cart, sessionId })
+                });
+            })
+            .then(res => res.json())
+            .then(order => {
+                cart = [];
+                localStorage.removeItem(`cart_${tableId}`);
+                displayCart();
+                // Reload order history to avoid duplicates
+                fetch(`/orders/history/${tableId}`)
+                    .then(res => res.json())
+                    .then(historyData => {
+                        orderHistory = historyData;
+                        displayOrderHistory();
+                    });
+                alert('Order placed!');
+            });
+        }
+        
+        function displayOrderHistory() {
+            const statusDiv = document.getElementById('orderStatus');
+            if (orderHistory.length === 0) {
+                statusDiv.innerHTML = '<p>No orders yet</p>';
+                return;
+            }
+            statusDiv.innerHTML = orderHistory.map(order => `
+                <div class="order-status">
+                    <h4>Order #${order.id} - ${order.status}</h4>
+                    <p>Time: ${new Date(order.created_at).toLocaleTimeString()}</p>
+                    <div>Items: ${order.items.map(item => `${item.name} x${item.quantity}`).join(', ')}</div>
+                    <div>Total: $${order.total_amount}</div>
+                </div>
+            `).join('');
+        }
+        
+        socket.on('orderUpdate', (order) => {
+            if (order.table_id === tableId) {
+                const existingOrder = orderHistory.find(o => o.id === order.id);
+                if (existingOrder) {
+                    existingOrder.status = order.status;
+                } else {
+                    orderHistory.push(order);
+                }
+                displayOrderHistory();
+            }
+        });
+        
+        socket.on('tableReset', (resetTableId) => {
+            if (resetTableId === tableId) {
+                // Clear everything for fresh start
+                orderHistory = [];
+                cart = [];
+                sessionId = null;
+                localStorage.removeItem(`cart_${tableId}`);
+                displayCart();
+                displayOrderHistory();
+                alert('Table has been reset. Welcome new customers!');
+            }
+        });
+    </script>
+</body>
+</html>
